@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: dpo-db
+    environment:
+      POSTGRES_USER: dpo
+      POSTGRES_PASSWORD: dpo
+      POSTGRES_DB: dpo
+    ports:
+      - "5432:5432"
+    volumes:
+      - dpo_pgdata:/var/lib/postgresql/data
+
+volumes:
+  dpo_pgdata:
