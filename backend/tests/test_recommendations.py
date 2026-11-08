@@ -119,8 +119,10 @@ def client(engine):
 def load_catalog(client) -> None:
     sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
     assert client.post("/admin/courses/import", json=sample).status_code == 200
-    published = client.post("/admin/courses/publish-drafts").json()
-    assert published == {"published": len(sample)}
+    drafts = client.get("/admin/courses", params={"status": "draft", "limit": 200}).json()
+    assert drafts["total"] == len(sample)
+    for item in drafts["items"]:
+        assert client.post(f"/admin/courses/{item['id']}/publish").status_code == 200
 
 
 def test_endpoint_returns_recommendation(client):

@@ -6,7 +6,8 @@ from app.schemas.course import CourseIn, ImportResult
 
 
 def import_courses(db: Session, items: list[CourseIn]) -> ImportResult:
-    """Создаёт новые курсы (статус draft) и обновляет уже известные по external_id."""
+    """Создаёт новые курсы (статус draft) и обновляет уже известные по external_id.
+    Статус сохраняется, кроме случая: у опубликованного курса изменилась разметка -> draft."""
     created = 0
     updated = 0
     for item in items:
@@ -28,6 +29,13 @@ def import_courses(db: Session, items: list[CourseIn]) -> ImportResult:
         course.rating = item.rating
         course.level_label = item.level_label
         course.direction = item.direction
+
+        # если у опубликованного курса изменилась разметка, его надо проверить заново
+        old_ranges = {(c.skill_code, c.from_level, c.to_level) for c in course.competencies}
+        new_ranges = {(r.skill, r.from_level, r.to_level) for r in item.ranges}
+        if course.status == "published" and old_ranges != new_ranges:
+            course.status = "draft"
+
 
         # старую разметку убираем и записываем заново
         course.competencies.clear()
