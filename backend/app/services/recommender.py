@@ -1,10 +1,12 @@
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Recommendation, RecommendationItem
+from app.models import Course, Recommendation, RecommendationItem
 from app.schemas.profile import Preferences, Profile
 from app.services.course_provider import load_candidates
 from app.services.dictionary_stub import DICTIONARY
 from app.services.matching import compute_gaps, pick_set
+from app.services.rationale import explain
 
 WEEKS_HORIZON = 12   # на сколько недель вперёд планируем обучение
 MAX_COURSES = 3 # максимум курсов в подборе
@@ -33,6 +35,14 @@ def recommend(db: Session, profile: Profile, prefs: Preferences) -> Recommendati
         max_courses=MAX_COURSES, hours_limit=hours_limit,
     )
 
+    # пояснения: названия выбранных курсов -> один запрос к нейросети на весь набор
+    ids = [int(p.course.id) for p in picks]
+    titles = {
+        str(c.id): c.title
+        for c in db.scalars(select(Course).where(Course.id.in_(ids)))
+    }
+    texts = explain(picks, titles, gaps)
+
     recommendation = Recommendation(
         user_id=profile.user_id,
         mode="gaps",
@@ -46,7 +56,7 @@ def recommend(db: Session, profile: Profile, prefs: Preferences) -> Recommendati
                 label="best" if i == 1 else "extra",
                 contribution=p.contribution,
                 score=p.score,
-                rationale=f"Закрывает около {round(p.contribution * 100)}% ваших пробелов.",
+                rationale=texts[i - 1],
             )
             for i, p in enumerate(picks, start=1)
         ],
