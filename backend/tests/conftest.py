@@ -1,6 +1,7 @@
 import pytest
 
 from app.services import llm
+from app.core.config import settings
 
 
 class FakeLLM:
@@ -23,6 +24,10 @@ class FakeLLM:
             raise answer
         return answer
 
+
+@pytest.fixture(autouse=True)
+def use_demo_profiles_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "accreditation_base_url", None)
 
 @pytest.fixture(autouse=True)
 def fake_llm():

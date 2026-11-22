@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import Recommendation
 from app.schemas.recommendation import CourseOut, RecommendationOut, RecommendationRequest
-from app.services.profile_stub import ProfileNotFound, get_profile
+from app.services import profile_client
 from app.services.recommender import recommend
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -40,9 +40,17 @@ def to_out(rec: Recommendation) -> RecommendationOut:
 
 @router.post("", response_model=RecommendationOut)
 def create_recommendation(body: RecommendationRequest, db: Session = Depends(get_db)):
-    """Подбирает курсы для человека и сохраняет рекомендацию."""
+    """Получает профиль, подбирает курсы и сохраняет рекомендацию."""
     try:
-        profile = get_profile(body.user_id)
-    except ProfileNotFound:
+        profile = profile_client.get_profile(body.user_id)
+    except profile_client.ProfileNotFound:
         raise HTTPException(status_code=404, detail="Профиль не найден")
+    except profile_client.ProfileUnavailable:
+        raise HTTPException(status_code=503, detail="Сервис аккредитации недоступен")
+    except profile_client.InvalidProfileResponse:
+        raise HTTPException(
+            status_code=502,
+            detail="Сервис аккредитации вернул некорректный профиль",
+        )
+
     return to_out(recommend(db, profile, body.preferences))

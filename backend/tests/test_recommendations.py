@@ -19,6 +19,12 @@ from app.services.importer import import_courses
 from app.services.profile_stub import get_profile
 from app.services.recommender import recommend
 
+from functools import partial
+
+import httpx
+
+from app.services import profile_client
+
 SAMPLE = Path(__file__).resolve().parent.parent / "data" / "courses.json"
 
 
@@ -149,3 +155,114 @@ def test_endpoint_returns_recommendation(client):
 def test_endpoint_unknown_user_returns_404(client):
     response = client.post("/recommendations", json={"user_id": "nobody"})
     assert response.status_code == 404
+
+REMOTE_USER = "10000000-0000-4000-8000-000000000001"
+
+
+def remote_profile_body(level: int) -> dict:
+    return {
+        "userId": REMOTE_USER,
+        "area": "Backend",
+        "competencies": [
+            {"skill": "SQL", "direction": "BACKEND", "rating": level, "target": 70}
+        ],
+    }
+
+
+@pytest.fixture
+def use_remote_profile(monkeypatch, use_demo_profiles_by_default):
+    original_fetch = profile_client.fetch_profile
+
+    def setup(handler):
+        monkeypatch.setattr(
+            profile_client.settings,
+            "accreditation_base_url",
+            "http://accreditation.test",
+        )
+        monkeypatch.setattr(
+            profile_client,
+            "fetch_profile",
+            partial(original_fetch, transport=httpx.MockTransport(handler)),
+        )
+
+    return setup
+
+
+@pytest.mark.parametrize(
+    "level, wrapped, expected_count",
+    [(35, False, 1), (35, True, 1), (70, False, 0)],
+)
+def test_endpoint_uses_remote_level(
+    client, engine, use_remote_profile, level, wrapped, expected_count
+):
+    load_catalog(client)
+    requests = []
+    payload = remote_profile_body(level)
+    if wrapped:
+        payload = {"status": "success", "data": payload}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json=payload)
+
+    use_remote_profile(handler)
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["courses"]) == expected_count
+    assert requests == [("GET", f"/dpo/{REMOTE_USER}/latest")]
+
+    with Session(engine) as session:
+        saved = session.get(Recommendation, data["recommendation_id"])
+        assert saved is not None
+        assert saved.profile_snapshot == {
+            "user_id": REMOTE_USER,
+            "direction": "BACKEND",
+            "skills": [{"skill": "SQL", "level": level, "target": 70}],
+        }
+
+
+@pytest.mark.parametrize(
+    "remote_status, expected_status",
+    [(204, 404), (404, 404), (500, 503)],
+)
+def test_endpoint_handles_remote_status(
+    client, use_remote_profile, remote_status, expected_status
+):
+    use_remote_profile(lambda request: httpx.Response(remote_status))
+
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == expected_status
+
+
+def test_endpoint_handles_profile_timeout(client, use_remote_profile):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("сервис не ответил", request=request)
+
+    use_remote_profile(handler)
+
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == 503
+
+
+def test_endpoint_rejects_invalid_profile(client, use_remote_profile):
+    use_remote_profile(
+        lambda request: httpx.Response(200, json=remote_profile_body(120))
+    )
+
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == 502
+
+
+def test_endpoint_rejects_profile_of_other_user(client, use_remote_profile):
+    payload = remote_profile_body(35)
+    payload["userId"] = "10000000-0000-4000-8000-000000000002"
+    use_remote_profile(lambda request: httpx.Response(200, json=payload))
+
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == 502

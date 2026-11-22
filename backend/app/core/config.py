@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import AnyHttpUrl
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,6 +19,8 @@ class Settings(BaseSettings):
         BACKEND_DIR / "certs" / "russian_trusted_root_ca_pem.crt"
     )
 
+    accreditation_base_url: AnyHttpUrl | None = None
+    accreditation_timeout: float = 5.0
     model_config = SettingsConfigDict(env_file=".env")
 
 
