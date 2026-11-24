@@ -15,7 +15,8 @@ def test_real_gigachat_marks_sql_course():
         description="Подзапросы, индексы, транзакции, проектирование таблиц.",
         level_label="intermediate",
     )
-    system, user = markup.build_prompt(course)
+    skill_codes = {"SQL"}
+    system, user = markup.build_prompt(course, skill_codes)
     answer = GigaChatClient(settings).complete(user, system, temperature=0.1, max_tokens=500)
-    ranges = markup.parse_answer(answer)
+    ranges = markup.parse_answer(answer, skill_codes)
     assert any(r["skill"] == "SQL" for r in ranges), answer

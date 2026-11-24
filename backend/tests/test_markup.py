@@ -1,4 +1,5 @@
 import json
+import httpx
 from pathlib import Path
 
 import pytest
@@ -205,3 +206,38 @@ def test_list_suggestions_newest_first(client, loaded, fake_llm):
     listing = client.get(f"/admin/courses/{course_id}/suggestions").json()
     assert [i["id"] for i in listing] == [b, a]
     assert client.get("/admin/courses/99999/suggestions").status_code == 404
+
+def test_suggest_uses_only_active_remote_skills(
+    client, loaded, fake_llm, use_remote_dictionary
+):
+    sql = {
+        "code": "SQL",
+        "direction": "BACKEND",
+        "target": 70,
+        "importance": 3,
+        "is_active": True,
+    }
+    inactive = {**sql, "code": "PYTHON", "is_active": False}
+    use_remote_dictionary(
+        lambda request: httpx.Response(200, json=[sql, inactive])
+    )
+    fake_llm.answers = [GOOD]
+
+    response = suggest(client, first_id(client))
+
+    assert response.status_code == 201
+    assert response.json()["ranges"] == [EXPECTED[1]]
+    assert "- SQL" in fake_llm.calls[0]["system"]
+    assert "- PYTHON" not in fake_llm.calls[0]["system"]
+
+
+def test_suggest_returns_503_when_dictionary_is_down(
+    client, loaded, fake_llm, use_remote_dictionary
+):
+    use_remote_dictionary(lambda request: httpx.Response(500))
+
+    response = suggest(client, first_id(client))
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Справочник компетенций недоступен"
+    assert fake_llm.calls == []

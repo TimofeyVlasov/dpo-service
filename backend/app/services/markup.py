@@ -12,8 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import Course, MarkupSuggestion
 from app.schemas.course import CoursePatch, RangeIn, RangeOut
 from app.schemas.markup import SuggestionOut
-from app.services import catalog
-from app.services.dictionary_stub import DICTIONARY
+from app.services import catalog, dictionary_client
 from app.services.llm import get_llm
 
 # нейросеть называет уровни словами, числа ставит код
@@ -42,9 +41,9 @@ def to_out(s: MarkupSuggestion) -> SuggestionOut:
     )
 
 
-def build_prompt(course: Course) -> tuple[str, str]:
-    """Возвращает (правила для нейросети, данные курса)."""
-    skills = "\n".join(f"- {code}" for code in DICTIONARY)
+def build_prompt(course: Course, skill_codes: set[str]) -> tuple[str, str]:
+    """Возвращает правила для нейросети и данные курса."""
+    skills = "\n".join(f"- {code}" for code in sorted(skill_codes))
     system = (
         "Ты помощник методиста. По описанию курса определи, каким навыкам он учит "
         "и с какого уровня на какой.\n"
@@ -66,7 +65,7 @@ def build_prompt(course: Course) -> tuple[str, str]:
     return system, user
 
 
-def parse_answer(text: str) -> list[dict]:
+def parse_answer(text: str, skill_codes: set[str]) -> list[dict]:
     """Достаёт из ответа нейросети JSON и оставляет только пригодные навыки.
     Плохие пункты молча отбрасываются; если не осталось ничего, это BadAnswer."""
     start, end = text.find("{"), text.rfind("}")  # нейросеть иногда оборачивает JSON в текст или ```
@@ -86,8 +85,8 @@ def parse_answer(text: str) -> list[dict]:
         code = str(item.get("skill", "")).strip().upper()
         low = LEVELS.get(str(item.get("from", "")).strip().lower())
         high = LEVELS.get(str(item.get("to", "")).strip().lower())
-        if code not in DICTIONARY or low is None or high is None:
-            continue  # код не из справочника или неизвестная метка
+        if code not in skill_codes or low is None or high is None:
+            continue
         if low >= high or code in result:
             continue  # диапазон неверный или навык уже есть
         result[code] = {"skill": code, "from_level": low, "to_level": high}
@@ -98,13 +97,22 @@ def parse_answer(text: str) -> list[dict]:
 
 
 def suggest(db: Session, course_id: int) -> MarkupSuggestion:
-    """Спрашивает нейросеть и сохраняет предложение (статус pending)."""
+    """Получает предложение нейросети и сохраняет его для проверки."""
     course = catalog.get_course(db, course_id)
-    system, user = build_prompt(course)
+    skill_codes = set(dictionary_client.get_dictionary())
+
+    if not skill_codes:
+        raise catalog.CatalogRuleError("в справочнике нет активных навыков для разметки")
+
+    system, user = build_prompt(course, skill_codes)
     answer = get_llm().complete(user, system, temperature=0.1, max_tokens=500)
-    ranges = parse_answer(answer)
+    ranges = parse_answer(answer, skill_codes)
+
     suggestion = MarkupSuggestion(
-        course_id=course.id, status="pending", ranges=ranges, raw_answer=answer
+        course_id=course.id,
+        status="pending",
+        ranges=ranges,
+        raw_answer=answer,
     )
     db.add(suggestion)
     db.commit()

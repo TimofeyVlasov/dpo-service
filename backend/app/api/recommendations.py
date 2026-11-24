@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models import Recommendation
 from app.schemas.recommendation import CourseOut, RecommendationOut, RecommendationRequest
-from app.services import profile_client
+from app.services import dictionary_client, profile_client
 from app.services.recommender import recommend
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -53,4 +53,14 @@ def create_recommendation(body: RecommendationRequest, db: Session = Depends(get
             detail="Сервис аккредитации вернул некорректный профиль",
         )
 
-    return to_out(recommend(db, profile, body.preferences))
+    try:
+        recommendation = recommend(db, profile, body.preferences)
+    except dictionary_client.DictionaryUnavailable:
+        raise HTTPException(status_code=503, detail="Справочник компетенций недоступен")
+    except dictionary_client.InvalidDictionaryResponse:
+        raise HTTPException(
+            status_code=502,
+            detail="Сервис аккредитации вернул некорректный справочник",
+        )
+
+    return to_out(recommendation)

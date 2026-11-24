@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.schemas.markup import AcceptIn, SuggestionOut
-from app.services import catalog, markup
+from app.services import catalog, dictionary_client, markup
 from app.services.llm import LLMUnavailable
 
 router = APIRouter(prefix="/admin", tags=["admin: markup"])
@@ -46,6 +46,15 @@ def _run(action):
         return action()
     except catalog.CourseNotFound:
         raise HTTPException(status_code=404, detail="курс не найден")
+    except catalog.CatalogRuleError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    except dictionary_client.DictionaryUnavailable:
+        raise HTTPException(status_code=503, detail="Справочник компетенций недоступен")
+    except dictionary_client.InvalidDictionaryResponse:
+        raise HTTPException(
+            status_code=502,
+            detail="Сервис аккредитации вернул некорректный справочник",
+        )
     except markup.SuggestionNotFound:
         raise HTTPException(status_code=404, detail="предложение не найдено")
     except markup.SuggestionStateError as error:

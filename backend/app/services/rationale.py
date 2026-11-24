@@ -10,7 +10,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from app.services.dictionary_stub import DICTIONARY
+from app.services import dictionary_client
 from app.services.llm import LLMUnavailable, get_llm
 from app.services.matching import Gap, Pick
 
@@ -86,16 +86,20 @@ def build_prompt(facts: list[Facts]) -> tuple[str, str]:
     return system, "\n".join(lines)
 
 
-def mentions_foreign_skill(text: str, f: Facts) -> bool:
-    """В тексте упомянут навык из справочника, которого у этого курса нет."""
-    own = {s["skill"] for s in f.steps}
+def mentions_foreign_skill(
+    text: str, f: Facts, known_skills: set[str]
+) -> bool:
+    """Проверяет, упомянут ли в пояснении посторонний навык."""
+    own = {step["skill"] for step in f.steps}
     return any(
-        code not in own and re.search(rf"\b{re.escape(code)}\b", text, re.IGNORECASE)
-        for code in DICTIONARY
+        re.search(rf"\b{re.escape(code)}\b", text, re.IGNORECASE)
+        for code in known_skills - own
     )
 
 
-def parse_answer(text: str, facts: list[Facts]) -> dict[int, str]:
+def parse_answer(
+    text: str, facts: list[Facts], known_skills: set[str]
+) -> dict[int, str]:
     """Достаёт пояснения из ответа. Негодные пункты просто пропускаются:
     для них потом возьмётся шаблон. Ничего не бросает."""
     start, end = text.find("{"), text.rfind("}")
@@ -120,20 +124,28 @@ def parse_answer(text: str, facts: list[Facts]) -> dict[int, str]:
         if not isinstance(body, str) or not body.strip():
             continue
         body = body.strip()[:MAX_TEXT]
-        if mentions_foreign_skill(body, facts[n - 1]):
+        if mentions_foreign_skill(body, facts[n - 1], known_skills):
             continue
         result[n] = body
     return result
 
 
 def explain(
-    picks: list[Pick], titles: dict[str, str], gaps: dict[str, Gap]
+    picks: list[Pick],
+    titles: dict[str, str],
+    gaps: dict[str, Gap],
+    *,
+    known_skills: set[str] | None = None,
 ) -> list[str]:
-    """Один текст на каждый выбранный курс, в том же порядке, что и picks."""
+    """Возвращает по одному пояснению на курс в порядке подбора."""
     if not picks:
         return []
+
+    if known_skills is None:
+        known_skills = set(dictionary_client.get_dictionary())
+
     facts = collect_facts(picks, titles, gaps)
-    fallback = [template_text(f) for f in facts]
+    fallback = [template_text(fact) for fact in facts]
 
     system, user = build_prompt(facts)
     try:
@@ -142,5 +154,5 @@ def explain(
         log.warning("пояснения: нейросеть недоступна (%s), взяты шаблоны", error)
         return fallback
 
-    texts = parse_answer(answer, facts)
+    texts = parse_answer(answer, facts, known_skills)
     return [texts.get(n, fallback[n - 1]) for n in range(1, len(facts) + 1)]

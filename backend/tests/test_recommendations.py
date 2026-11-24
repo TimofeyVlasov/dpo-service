@@ -170,14 +170,23 @@ def remote_profile_body(level: int) -> dict:
 
 
 @pytest.fixture
-def use_remote_profile(monkeypatch, use_demo_profiles_by_default):
+def use_remote_profile(monkeypatch, use_remote_dictionary):
     original_fetch = profile_client.fetch_profile
 
-    def setup(handler):
-        monkeypatch.setattr(
-            profile_client.settings,
-            "accreditation_base_url",
-            "http://accreditation.test",
+    def setup(handler, *, dictionary_target=70):
+        use_remote_dictionary(
+            lambda request: httpx.Response(
+                200,
+                json=[
+                    {
+                        "code": "SQL",
+                        "direction": "BACKEND",
+                        "target": dictionary_target,
+                        "importance": 3,
+                        "is_active": True,
+                    }
+                ],
+            )
         )
         monkeypatch.setattr(
             profile_client,
@@ -266,3 +275,18 @@ def test_endpoint_rejects_profile_of_other_user(client, use_remote_profile):
     response = client.post("/recommendations", json={"user_id": REMOTE_USER})
 
     assert response.status_code == 502
+
+def test_endpoint_uses_target_from_remote_dictionary(
+    client, use_remote_profile, fake_llm
+):
+    load_catalog(client)
+    use_remote_profile(
+        lambda request: httpx.Response(200, json=remote_profile_body(70)),
+        dictionary_target=85,
+    )
+
+    response = client.post("/recommendations", json={"user_id": REMOTE_USER})
+
+    assert response.status_code == 200
+    assert response.json()["courses"]
+    assert "нужно 85" in fake_llm.calls[0]["user"]

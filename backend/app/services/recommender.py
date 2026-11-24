@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.models import Course, Recommendation, RecommendationItem
 from app.schemas.profile import Preferences, Profile
 from app.services.course_provider import load_candidates
-from app.services.dictionary_stub import DICTIONARY
+from app.services import dictionary_client
 from app.services.matching import compute_gaps, pick_set
 from app.services.rationale import explain
 
@@ -14,15 +14,16 @@ MAX_COURSES = 3 # максимум курсов в подборе
 
 def recommend(db: Session, profile: Profile, prefs: Preferences) -> Recommendation:
     """Собирает всё вместе: профиль + справочник + курсы из базы -> подбор -> сохранение."""
+    dictionary = dictionary_client.get_dictionary()
     levels: dict[str, int] = {}
     targets: dict[str, int] = {}
     importance: dict[str, int] = {}
     for s in profile.skills:
-        info = DICTIONARY.get(s.skill)
-        if info is None:
-            continue  # навыка нет в справочнике, пропускаем
+        info = dictionary.get(s.skill)
+        if info is None or info.direction != profile.direction:
+            continue
+
         levels[s.skill] = s.level
-        # цель = большая из личной и из справочника (правило ещё нужно подтвердить)
         targets[s.skill] = max(s.target, info.target)
         importance[s.skill] = info.importance
 
@@ -41,7 +42,7 @@ def recommend(db: Session, profile: Profile, prefs: Preferences) -> Recommendati
         str(c.id): c.title
         for c in db.scalars(select(Course).where(Course.id.in_(ids)))
     }
-    texts = explain(picks, titles, gaps)
+    texts = explain(picks, titles, gaps, known_skills=set(dictionary))
 
     recommendation = Recommendation(
         user_id=profile.user_id,

@@ -3,6 +3,12 @@ import pytest
 from app.services import llm
 from app.core.config import settings
 
+from functools import partial
+
+import httpx
+
+from app.services import dictionary_client
+
 
 class FakeLLM:
     """Подставной вместо GigaChat. В сеть не ходит.
@@ -35,3 +41,21 @@ def fake_llm():
     llm.set_llm(fake)
     yield fake
     llm.set_llm(None)
+
+@pytest.fixture
+def use_remote_dictionary(monkeypatch, use_demo_profiles_by_default):
+    original_fetch = dictionary_client.fetch_dictionary
+
+    def setup(handler):
+        monkeypatch.setattr(
+            settings,
+            "accreditation_base_url",
+            "http://accreditation.test",
+        )
+        monkeypatch.setattr(
+            dictionary_client,
+            "fetch_dictionary",
+            partial(original_fetch, transport=httpx.MockTransport(handler)),
+        )
+
+    return setup
